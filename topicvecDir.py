@@ -10,7 +10,9 @@ import time
 import re
 import os
 from scipy.spatial.distance import cdist
-
+from palmettopy.palmetto import Palmetto
+from nltk.corpus import stopwords
+from nltk.stem.wordnet import WordNetLemmatizer
 # V: W x N0
 # T: K x N0
 # VT: W x K
@@ -22,7 +24,12 @@ from scipy.spatial.distance import cdist
 
 class topicvecDir:
     def __init__(self, **kwargs):
-        self.unigramFilename = kwargs.get( 'unigramFilename', "top1grams-wiki.txt" )
+
+        print kwargs
+        self.palmetto = Palmetto()
+        self.output_folder_path = kwargs.get( 'output_folder_path', "output/" )
+        self.output_file_name = kwargs.get( 'output_file_name', "results" )
+        self.vocab_file = kwargs.get( 'vocab_file', "top1grams-wiki.txt" )
         self.word_vec_file = kwargs.get( 'word_vec_file', "25000-500-EM.vec" )
         self.topic_vec_file = kwargs.get( 'topic_vec_file', None )
         self.W = kwargs.get( 'load_embedding_word_count', -1 )
@@ -67,40 +74,33 @@ class topicvecDir:
         self.rebase_vecs = kwargs.get( 'rebase_vecs', False )
         self.rebase_norm_thres = kwargs.get( 'rebase_norm_thres', 0 )
         self.evalKmeans = kwargs.get( 'evalKmeans', False )
-        
+
         self.D = 0
         self.docsName = "Uninitialized"
+        self.vocab_dict = loadVocabFile(self.vocab_file)
 
-        #self.alpha = np.array( [ self.alpha1 ] * self.K )
-        #if self.zero_topic0:
-        #    self.alpha[0] = self.alpha0
 
-        self.vocab_dict = loadUnigramFile(self.unigramFilename)
-        
-        embedding_npyfile = self.word_vec_file + ".npy"
-        if os.path.isfile(embedding_npyfile):
-            print "Load embeddings from npy file '%s'" %embedding_npyfile
-            embedding_arrays = np.load(embedding_npyfile)
-            self.V, self.vocab, self.word2ID, skippedWords_whatever = embedding_arrays
-        else:
-            self.V, self.vocab, self.word2ID, skippedWords_whatever = load_embeddings(self.word_vec_file, self.W)
-            embedding_arrays = np.array( [ self.V, self.vocab, self.word2ID, skippedWords_whatever ] )
-            print "Save embeddings to npy file '%s'" %embedding_npyfile
-            np.save( embedding_npyfile, embedding_arrays )
-            
+        embedding_file_name = self.word_vec_file.rsplit('/',1)[1]
+
+        embedding_npyfile = self.output_folder_path+embedding_file_name+'.npy'
+
+        self.V, self.vocab, self.word2ID, skippedWords_whatever = load_embeddings(self.word_vec_file, self.W)
+        embedding_arrays = np.array( [ self.V, self.vocab, self.word2ID, skippedWords_whatever ] )
+        np.save( embedding_npyfile, embedding_arrays )
+
         # map of word -> id of all words with embeddings
         vocab_dict2 = {}
-        
+
         if self.normalize_vecs:
             self.V = normalizeF(self.V)
-            
+
         # dimensionality of topic/word embeddings
         self.N0 = self.V.shape[1]
         # number of all words
         self.vocab_size = self.V.shape[0]
-        
+
         # set unigram probs
-        u2 = []    
+        u2 = []
         oovcount = 0
         unigram_oov_prior = 0.000001
         for wid,w in enumerate(self.vocab):
@@ -108,21 +108,21 @@ class topicvecDir:
                 oovcount += 1
                 u2.append(unigram_oov_prior)
             else:
-                u2.append( self.vocab_dict[w][2] )
+                # u2.append( self.vocab_dict[w][2] )
+                u2.append( unigram_oov_prior )
                 vocab_dict2[w] = wid
 
         if oovcount > 0:
-            print "%d words in '%s' but not in '%s'. Unigram prob set to oov prior %.3g" %(oovcount, self.word_vec_file, 
-                    self.unigramFilename, unigram_oov_prior)
-            
+            print "%d words in '%s' but not in '%s'. Unigram prob set to oov prior %.3g" %(oovcount, self.word_vec_file,
+                    self.vocab_file, unigram_oov_prior)
+
         u2 = np.array(u2)
         self.u = normalize(u2)
         # structure of vocab_dict changed here. Original vocab_dict is w->[id, freq, unigram_prob]
         # now vocab_dict is only w->id
         self.vocab_dict = vocab_dict2
-
-        # u2 is the top "Mstep_sample_topwords" words of u, 
-        # used for a sampling inference (i.e. only the most 
+        # u2 is the top "Mstep_sample_topwords" words of u,
+        # used for a sampling inference (i.e. only the most
         # important "Mstep_sample_topwords" words are used) in the M-step
         # if Mstep_sample_topwords == 0, sampling is disabled
         if self.Mstep_sample_topwords == 0:
@@ -133,12 +133,12 @@ class topicvecDir:
             self.u2 = self.u[:self.Mstep_sample_topwords]
             self.u2 = normalize(self.u2)
             self.V2 = self.V[:self.Mstep_sample_topwords]
-            
+
         customStopwordList = re.split( r"\s+", self.customStopwords )
         for stop_w in customStopwordList:
             stopwordDict[stop_w] = 1
         print "Custom stopwords: %s" %( ", ".join(customStopwordList) )
-        
+
         if 'fileLogger' not in kwargs:
             self.logfilename = kwargs.get( 'logfilename', "topicvecDir" )
             self.fileLogger = initFileLogger( self.logfilename, self.appendLogfile )
@@ -164,6 +164,9 @@ class topicvecDir:
         # current iteration number
         self.it = 0
 
+
+
+
     def setK(self, K):
         self.K = K
         self.alpha = np.array( [ self.alpha1 ] * self.K )
@@ -188,7 +191,7 @@ class topicvecDir:
             for wid in xrange(self.vocab_size):
                 self.Evv += self.u[wid] * np.outer( self.V[wid], self.V[wid] )
             print "Done."
-                    
+
     def calcEm(self, docs_Pi):
         Em = np.zeros(self.K)
         for d in xrange( len(docs_Pi) ):
@@ -220,7 +223,7 @@ class topicvecDir:
     def updateTheta(self):
         for d in xrange(self.D):
             self.docs_theta[d] = np.sum( self.docs_Pi[d], axis=0 ) + self.alpha
-            
+
     def updatePi(self, docs_theta):
         docs_Pi = []
         psiDocs_theta = psi(docs_theta)
@@ -231,17 +234,17 @@ class topicvecDir:
 
             wids = self.docs_wids[d]
             L = self.docs_L[d]
-            
+
             # faster computation, more memory
             if L <= 20000:
                 # Vd: L x N0
                 Vd = self.V[wids]
                 TV = np.dot( Vd, self.T.T )
                 Pi = np.exp( psiDocs_theta[d] + TV + self.r )
-            # slower but avoids using up memory    
+            # slower but avoids using up memory
             else:
                 Pi = np.zeros( (L, self.K) )
-    
+
                 for i,wid in enumerate(wids):
                     v = self.V[wid]
                     Tv = np.dot( self.T, v )
@@ -272,7 +275,7 @@ class topicvecDir:
             grad_scale = self.grad_scale_Em_base / np.sum(Em)
         else:
             grad_scale = 1
-                                
+
         # Em: 1 x K vector
         # r: 1 x K vector
         # Em_exp_r: 1 x K vector
@@ -289,11 +292,11 @@ class topicvecDir:
         # dLdT, gradT: K x N0
         dLdT = self.sum_pi_v - Em_drdT
         gradT = dLdT * self.delta * grad_scale
-        
+
         gradTNorms = np.linalg.norm( gradT, axis=1 )
         TNorms = np.linalg.norm( self.T, axis=1 )
         TNorms[ TNorms < 1e-2 ] = 1.0
-            
+
         gradTScale = np.ones(self.K)
         gradFractions = gradTNorms / TNorms
         for k,fraction in enumerate(gradFractions):
@@ -301,7 +304,7 @@ class topicvecDir:
                 gradTScale[k] = self.max_grad_norm_fraction / fraction
             if self.max_grad_norm > 0 and TNorms[k] > self.max_grad_norm:
                 gradTScale[k] = min( gradTScale[k], self.max_grad_norm / TNorms[k] )
-                    
+
         gradT *= gradTScale[:, None]
         T2 = self.T + gradT
 
@@ -333,7 +336,7 @@ class topicvecDir:
             #for i in xrange(L):
             #    self.sum_pi_v += np.outer( Pi[i], self.V[ wids[i] ] )
             self.sum_pi_v += np.dot( Pi.T, self.V[wids] )
-            
+
     # the returned outputter always output to the log file
     # screenVerboseThres controls when the generated outputter will output to screen
     # when self.verbose >= screenVerboseThres, screen output is enabled
@@ -368,7 +371,7 @@ class topicvecDir:
         wids_topics_sim = np.dot( normalizeF( self.V[wids2] ), normalizeF(self.T).T )
         wids_topics_dot = np.dot( self.V[wids2], self.T.T )
 
-        # row ID: de-duplicated id, also the row idx in the 
+        # row ID: de-duplicated id, also the row idx in the
         # matrices wids_topics_sim and wids_topics_dot
         wid2rowID = {}
         for i, wid in enumerate(wids2):
@@ -409,7 +412,7 @@ class topicvecDir:
                     row_topicsProp[rowID][k] += 1
                 else:
                     row_topicsProp[rowID] += docs_Pi[d][i]
-            
+
         # the topic prop of each word, indexed by the row ID
         # take account of the word freq, but dampen it with sqrt
         # so that more similar, less frequent words have chance to be selected
@@ -449,7 +452,7 @@ class topicvecDir:
             rowID_sorted = sorted( range(W2), key=lambda rowID: row_topicsDampedProp[rowID, k], reverse=True )
 
             out("Most relevant words:")
-
+            most_relevant_words = []
             line = ""
             for rowID in rowID_sorted[:self.topW]:
                 wid = wids2[rowID]
@@ -457,11 +460,36 @@ class topicvecDir:
                 topicProp = row_topicsProp[rowID, k]
                 sim = wids_topics_sim[rowID, k]
                 dotprod = wids_topics_dot[rowID, k]
-
+                most_relevant_words.append(self.vocab[wid])
                 line += "%s (%d,%d): %.2f/%.2f/%.2f/%.2f " %( self.vocab[wid], wid, self.wid2freq[wid],
                                     topicDampedProp, topicProp, sim, dotprod )
 
             out(line)
+
+
+            #calculate and print palmetto scores
+            out("topic coherence for relevant words")
+            all_coherence_types = ["ca","cp","cv","npmi","uci","umass"]
+            coherence_string = ""
+
+            # convert sentences into a single bagofwords
+            lmtzr = WordNetLemmatizer()
+            # words = [ word.split('-') for word in most_relevant_words]
+            most_relevant_words = [lmtzr.lemmatize(w) for w in most_relevant_words if len(w)>1 if w not in stopwords.words('english')]
+            print(most_relevant_words)
+            for score_type in all_coherence_types:
+                try:
+                	print('trying coherence')
+                	coherence = self.palmetto.get_coherence(most_relevant_words,coherence_type=score_type)
+                	print('coherence for '+score_type)
+                	print(coherence)
+                except:
+                	print("coherence didn't work")
+                	coherence = 0
+                else:
+                    coherence_string += "(%s : %.3f) , " %(score_type,coherence)
+
+            out(coherence_string)
 
             if np.linalg.norm( self.T[k] ) == 0:
                 continue
@@ -469,7 +497,7 @@ class topicvecDir:
             V_topic_dot = np.dot( self.V2, self.T[k] )
             V_topic_sim = V_topic_dot / np.linalg.norm( self.V2, axis=1 ) / np.linalg.norm( self.T[k] )
 
-            wid_sorted = sorted( xrange(self.Mstep_sample_topwords), 
+            wid_sorted = sorted( xrange(self.Mstep_sample_topwords),
                                 key=lambda wid: V_topic_sim[wid], reverse=True )
 
             out("Most similar words in vocab:")
@@ -496,12 +524,12 @@ class topicvecDir:
             wids = []
             for sentence in wordsInSentences:
                 for w in sentence:
-                    w = w.lower()
                     if self.remove_stop and w in stopwordDict:
                         stopwordWC += 1
                         continue
 
                     if w in self.vocab_dict:
+
                         wid = self.vocab_dict[w]
                         wids.append(wid)
                         wids_freq[wid] += 1
@@ -532,6 +560,7 @@ class topicvecDir:
         for wid, freq in wid_freqs[:30]:
             line += "%s(%d): %d " %( self.vocab[wid], wid, freq )
         out1(line)
+
         return docs_idx, docs_wids, wid2freq, wids_freq
 
     def setDocs( self, docs_wordsInSentences, docs_name ):
@@ -560,7 +589,7 @@ class topicvecDir:
             self.V -= avgV
             # update the precomputed matrices/vectors
             self.precompute()
-            
+
 #        if self.useLocalU:
 #            self.local_u = self.wids_freq / self.totalL
 #            assert abs( np.sum(self.local_u) - 1 ) < 1e-5, \
@@ -575,7 +604,7 @@ class topicvecDir:
             self.docsName = "'%s'...(%d docs)" %( docs_name[0], self.D )
 
         return self.docs_idx
-        
+
     def kmeans( self, maxiter=10 ):
         """ centers, Xtocentre, distances = topicvec.kmeans( ... )
         in:
@@ -591,45 +620,45 @@ class topicvecDir:
             Xtocentre: each X -> its nearest center, ints M -> K
             distances, M
         """
-    
+
         wids2 = self.wid2freq.keys()
         weights = np.array( self.wid2freq.values() )
-        
+
         X = normalizeF( self.V[wids2] )
         centers = randomsample( X, self.K )
-        
+
         if self.verbose:
             print "kmeans: X %s  centers %s  tolerance=%.2g  maxiter=%d" %(
                 X.shape, centers.shape, self.topicDiff_tolerance, maxiter )
-        
+
         M = X.shape[0]
         allx = np.arange(M)
         prevdist = 0
-        
+
         for jiter in range( 1, maxiter+1 ):
             D = cdist( X, centers, metric='cosine' )  # |X| x |centers|
             xtoc = D.argmin(axis=1)  # X -> nearest center
             distances = D[allx,xtoc]
             #avdist = distances.mean()  # median ?
             avdist = (distances * weights).sum() / weights.sum()
-            
+
             if self.verbose >= 2:
                 print "kmeans: av |X - nearest center| = %.4g" % avdist
-                
+
             if (1 - self.topicDiff_tolerance) * prevdist <= avdist <= prevdist \
             or jiter == maxiter:
                 break
-                
+
             prevdist = avdist
-            
+
             for jc in range(self.K):  # (1 pass in C)
                 c = np.where( xtoc == jc )[0]
                 if len(c) > 0:
                     centers[jc] = ( X[c] * weights[c, None] ).mean( axis=0 )
-                    
+
         if self.verbose:
             print "kmeans: %d iterations  cluster sizes:" % jiter, np.bincount(xtoc)
-            
+
         if self.verbose >= 2:
             r50 = np.zeros(self.K)
             r90 = np.zeros(self.K)
@@ -639,11 +668,11 @@ class topicvecDir:
                     r50[j], r90[j] = np.percentile( dist, (50, 90) )
             print "kmeans: cluster 50% radius", r50.astype(int)
             print "kmeans: cluster 90% radius", r90.astype(int)
-        
+
         self.T = centers
         self.kmeans_xtoc = xtoc
-        self.kmeans_distances = distances    
-    
+        self.kmeans_distances = distances
+
     def inferTopicProps( self, T, MAX_ITERS=5 ):
 
         self.T = T
@@ -654,11 +683,12 @@ class topicvecDir:
 
         for i in xrange(MAX_ITERS):
             iterStartTime = time.time()
+            print('1')
             docs_Pi2 = self.docs_Pi
             self.docs_Pi = self.updatePi( self.docs_theta )
             self.updateTheta()
             self.calcSum_pi_v()
-            
+
             if i > 0:
                 docs_Pi_diff = np.zeros(self.D)
                 for d in xrange(self.D):
@@ -668,10 +698,11 @@ class topicvecDir:
             else:
                 max_Pi_diff = 0
                 total_Pi_diff = 0
-
+            print('2')
             iterDur = time.time() - iterStartTime
             loglike = self.calcLoglikelihood()
-            print "Iter %d loglike %.2f, Pi diff total %.3f, max %.3f. %.1fs" %( i, 
+            print('3')
+            print "Iter %d loglike %.2f, Pi diff total %.3f, max %.3f. %.1fs" %( i,
                                  loglike, total_Pi_diff, max_Pi_diff, iterDur )
 
         docs_Em = np.zeros( (self.D, self.K) )
@@ -751,7 +782,7 @@ class topicvecDir:
             # T, r not updated inside updateTopicEmbeddings()
             # because sometimes we want to keep the original T, r
             self.T, self.r, topicDiffNorm, maxTStep = self.updateTopicEmbeddings()
-            
+
             if self.it % self.VStep_iterNum == 0:
                 # does it matter to swap updatePi() & updateTheta()?
                 self.docs_Pi = self.updatePi( self.docs_theta )
@@ -788,9 +819,10 @@ class topicvecDir:
                 self.fileLogger.debug(iterStatusMsg)
                 Em = self.calcEm( self.docs_Pi )
                 self.fileLogger.debug( "Em:\n%s\n", Em )
-                
+
             Ts_loglikes.append( [ self.it, self.T, loglike ] )
-            
+        
+
         if self.verbose >= 1:
             # if == 0, topics has just been printed in the while loop
             if self.it % self.printTopics_iterNum != 0:
@@ -800,20 +832,20 @@ class topicvecDir:
         endTime = time.time()
         endTimeStr = timeToStr(endTime)
         inferDur = int(endTime - startTime)
-        
+
         print
         out0( "%s inference ends at %s. %d iters, %d seconds." %( self.docsName, endTimeStr, self.it, inferDur ) )
-
-        # Em: the global (all documents) distribution of topic mass 
+        
+        # Em: the global (all documents) distribution of topic mass
         Em = self.calcEm( self.docs_Pi )
-        # docs_Em: the document-wise distribution of topic mass 
+        # docs_Em: the document-wise distribution of topic mass
         docs_Em = np.zeros( (self.D, self.K) )
         for d, Pi in enumerate(self.docs_Pi):
             docs_Em[d] = np.sum( Pi, axis=0 )
 
         # sort according to loglike
         Ts_loglikes_sorted = sorted( Ts_loglikes, key=lambda T_loglike: T_loglike[2], reverse=True )
-        # best T could be the last T. 
+        # best T could be the last T.
         # In that case, the two elements in best_last_Ts are the same
         best_last_Ts = [ Ts_loglikes_sorted[0], Ts_loglikes[-1] ]
 

@@ -1,0 +1,38 @@
+corpus_file: dataset/yelp_reviews_sent.txt
+output_folder_path: output/
+output_file_name: results
+vocab_file: dataset/sent_vocab_copy.txt
+word_vec_file: dataset/yelp_skip_thoughts_embed.vec
+load_embedding_word_count: 50000
+K: 100
+# set it to 0 to disable the removal of very small topics
+topTopicMassFracThres: 0.05
+N0: 4800
+# N0=500,
+# don't set it too big, e.g. 5.
+# otherwise derived topics will be too specific, and classification accuracy will drop.
+max_l: 3
+init_l: 1
+# cap the norm of the gradient of topics to avoid too big gradients
+max_grad_norm: 1
+Mstep_sample_topwords: 15000
+# normalize by the sum of Em when updating topic embeddings
+# to avoid too big gradients
+grad_scale_Em_base: 20000
+topW: 12
+# when topTopicMassFracPrintThres = 0, print all topics
+topTopicMassFracPrintThres: 0
+alpha0: 0.1
+alpha1: 0.1
+delta: 0.1
+MAX_EM_ITERS: 100
+MAX_TopicProp_ITERS: 1
+topicDiff_tolerance: 0.01
+zero_topic0: True
+remove_stop: True
+useDrdtApprox: False
+verbose: 0
+seed: 0
+printTopics_iterNum: 10
+calcSum_pi_v_iterNum: 1
+VStep_iterNum: 5
